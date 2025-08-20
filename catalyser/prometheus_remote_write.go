@@ -1,47 +1,69 @@
 package catalyser
 
 import (
+	"bytes"
+	"errors"
 	"io"
-	"io/ioutil"
+	"maps"
 	"math"
 	"net/http"
 	"net/url"
+	"strconv"
+	"time"
 
-	"github.com/golang/protobuf/proto"
 	"github.com/golang/snappy"
 	"github.com/ovh/catalyst/core"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/prometheus/prompb"
+	dto "github.com/prometheus/client_model/go"
+	"github.com/prometheus/common/expfmt"
 	log "github.com/sirupsen/logrus"
 )
 
 // HandleRemoteWrite support remote_write protocol
 // https://github.com/prometheus/prometheus/tree/0e0fc5a7f45ce28632f43f1ead0183ee82c7afca/documentation/examples/remote_storage/remote_storage_adapter
 func HandleRemoteWrite(url *url.URL, headers *http.Header, r io.Reader, send func([]byte) error, dpCounter prometheus.Counter) (int, int, error) {
+	var err error
 	dps := 0
 
-	compressed, err := ioutil.ReadAll(r)
+	compressed, err := io.ReadAll(r)
 	if err != nil {
 		log.WithError(err).Error("Cannot read body")
 		return 0, http.StatusBadRequest, err
 	}
 
-	reqBuf, err := snappy.Decode(nil, compressed)
-	if err != nil {
-		log.Error("msg", "Decode error", "err", err.Error())
-		return 0, http.StatusInternalServerError, err
+	format := expfmt.ResponseFormat(*headers)
+	if format == expfmt.FmtUnknown {
+		return 0, http.StatusBadRequest, errors.New("unknown format")
 	}
 
-	var wReq prompb.WriteRequest
-	if err := proto.Unmarshal(reqBuf, &wReq); err != nil {
-		return 0, http.StatusBadRequest, err
+	reqBuf := compressed
+	switch headers.Get("Content-Encoding") {
+	case "snappy":
+		reqBuf, err = snappy.Decode(nil, compressed)
+		if err != nil {
+			log.Error("msg", "Decode error", "err", err.Error())
+			return 0, http.StatusInternalServerError, err
+		}
 	}
 
-	for _, promGts := range wReq.GetTimeseries() {
-		for _, gts := range formatPromGts(promGts) {
-			_ = send(gts.Encode())
-			dpCounter.Inc()
-			dps++
+	dec := expfmt.NewDecoder(bytes.NewReader(reqBuf), format)
+	for {
+		var mf dto.MetricFamily
+		if err := dec.Decode(&mf); err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return dps, http.StatusBadRequest, err
+		}
+
+		for _, promGts := range mf.GetMetric() {
+			for _, gts := range formatPromGts(mf.GetName(), mf.GetType(), promGts) {
+				if err := send(gts.Encode()); err != nil {
+					return dps, http.StatusInternalServerError, err
+				}
+				dpCounter.Inc()
+				dps++
+			}
 		}
 	}
 
@@ -49,38 +71,92 @@ func HandleRemoteWrite(url *url.URL, headers *http.Header, r io.Reader, send fun
 	return dps, http.StatusOK, nil
 }
 
-func formatPromGts(ts *prompb.TimeSeries) []*core.GTS {
-	gtss := make([]*core.GTS, len(ts.GetSamples()))
-
-	name := ""
-	labels := map[string]string{}
-
-	for _, label := range ts.GetLabels() {
-		if label.GetName() == "__name__" {
-			name = label.GetValue()
-			continue
-		}
-
-		labels[label.GetName()] = label.GetValue()
+func formatPromGts(familyName string, familyType dto.MetricType, ts *dto.Metric) []*core.GTS {
+	// Base labels from the metric (no __name__ in dto metrics)
+	baseLabels := map[string]string{}
+	for _, label := range ts.GetLabel() {
+		baseLabels[label.GetName()] = label.GetValue()
 	}
 
-	for i, dp := range ts.GetSamples() {
-		v := dp.GetValue()
+	// Helper to clone labels and set one
+	cloneWith := func(extra map[string]string) map[string]string {
+		out := make(map[string]string, len(baseLabels)+len(extra))
+		maps.Copy(out, baseLabels)
+		maps.Copy(out, extra)
+		return out
+	}
 
-		// +Inf, -Inf -> 0
-		if v == math.Inf(1) || v == math.Inf(-1) || math.IsNaN(v) {
-			v = 0
+	tsMs := ts.GetTimestampMs()
+	if tsMs == 0 {
+		tsMs = time.Now().UnixMilli()
+	}
+
+	var out []*core.GTS
+
+	switch familyType {
+	case dto.MetricType_GAUGE:
+		if ts.GetGauge() != nil {
+			out = append(out, makePoint(familyName, cloneWith(nil), tsMs, ts.GetGauge().GetValue()))
 		}
-
-		gtss[i] = &core.GTS{
-			Name:   name,
-			Labels: labels,
-			Ts:     float64(dp.GetTimestamp() * 1000), // ms -> μs
-			Value:  v,
+	case dto.MetricType_COUNTER:
+		if ts.GetCounter() != nil {
+			out = append(out, makePoint(familyName, cloneWith(nil), tsMs, ts.GetCounter().GetValue()))
+		}
+	case dto.MetricType_UNTYPED:
+		if ts.GetUntyped() != nil {
+			out = append(out, makePoint(familyName, cloneWith(nil), tsMs, ts.GetUntyped().GetValue()))
+		}
+	case dto.MetricType_SUMMARY:
+		if s := ts.GetSummary(); s != nil {
+			// Quantiles under base name with quantile label
+			for _, q := range s.GetQuantile() {
+				qLabel := map[string]string{"quantile": strconv.FormatFloat(q.GetQuantile(), 'g', -1, 64)}
+				out = append(out, makePoint(familyName, cloneWith(qLabel), tsMs, q.GetValue()))
+			}
+			// _count and _sum
+			out = append(out, makePoint(familyName+"_count", cloneWith(nil), tsMs, float64(s.GetSampleCount())))
+			out = append(out, makePoint(familyName+"_sum", cloneWith(nil), tsMs, s.GetSampleSum()))
+		}
+	case dto.MetricType_HISTOGRAM:
+		if h := ts.GetHistogram(); h != nil {
+			// Buckets under name_bucket with le label (upper bound)
+			for _, b := range h.GetBucket() {
+				ub := b.GetUpperBound()
+				le := strconv.FormatFloat(ub, 'g', -1, 64)
+				if math.IsInf(ub, 1) {
+					le = "+Inf"
+				}
+				leLabel := map[string]string{"le": le}
+				out = append(out, makePoint(familyName+"_bucket", cloneWith(leLabel), tsMs, float64(b.GetCumulativeCount())))
+			}
+			// _count and _sum
+			out = append(out, makePoint(familyName+"_count", cloneWith(nil), tsMs, float64(h.GetSampleCount())))
+			out = append(out, makePoint(familyName+"_sum", cloneWith(nil), tsMs, h.GetSampleSum()))
+		}
+	default:
+		// Fallback: try untyped/counter/gauge if present
+		if ts.GetGauge() != nil {
+			out = append(out, makePoint(familyName, cloneWith(nil), tsMs, ts.GetGauge().GetValue()))
+		} else if ts.GetCounter() != nil {
+			out = append(out, makePoint(familyName, cloneWith(nil), tsMs, ts.GetCounter().GetValue()))
+		} else if ts.GetUntyped() != nil {
+			out = append(out, makePoint(familyName, cloneWith(nil), tsMs, ts.GetUntyped().GetValue()))
 		}
 	}
 
-	log.Debug(len(gtss))
+	log.Debugf("gts len=%d", len(out))
+	return out
+}
 
-	return gtss
+func makePoint(name string, labels map[string]string, tsMs int64, v float64) *core.GTS {
+	// Normalize invalid floats
+	if v == math.Inf(1) || v == math.Inf(-1) || math.IsNaN(v) {
+		v = 0
+	}
+	return &core.GTS{
+		Name:   name,
+		Labels: labels,
+		Ts:     float64(tsMs * 1000), // ms -> μs
+		Value:  v,
+	}
 }
