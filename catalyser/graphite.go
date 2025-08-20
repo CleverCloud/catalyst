@@ -314,9 +314,9 @@ func (g *Graphite) OpenWarp(token string, txn string) (*core.Warp, error) {
 func parseLine(metric string, parse bool) (*core.GTS, error) {
 	split := strings.Split(metric, " ")
 
-	// Expected format is : 'metrics value [timestamp]'
+	// Expected format is: 'metrics value [timestamp]'
 	if len(split) < 2 {
-		return nil, errors.New("Bad metric format")
+		return nil, errors.New("bad metric format")
 	}
 
 	ts := time.Now().UnixNano() / 1000000
@@ -325,11 +325,11 @@ func parseLine(metric string, parse bool) (*core.GTS, error) {
 		var err error
 		ts, err = strconv.ParseInt(split[2], 10, 64)
 		if err != nil {
-			return nil, errors.New("Bad metric part: timestamp")
+			return nil, errors.New("bad metric part: timestamp")
 		}
 	}
 
-	var value interface{}
+	var value any
 	skip := false
 
 	// try to convert the string into a float64

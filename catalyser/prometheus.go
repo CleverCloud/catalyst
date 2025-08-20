@@ -48,9 +48,7 @@ func Prometheus(url *url.URL, headers *http.Header, r io.Reader, send func([]byt
 		return dps, -1, core.NewParsingError("Unable to create decoder to decode response", path)
 	}
 
-	log.WithFields(log.Fields{
-		"format": format,
-	}).Println("Decoding Prometheus")
+	log.WithFields(log.Fields{"format": format}).Println("Decoding Prometheus")
 
 	for {
 		// Decoding protobuff
