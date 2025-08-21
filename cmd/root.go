@@ -57,10 +57,9 @@ func initConfig() {
 
 	hostname, err := os.Hostname()
 	if err != nil {
-		viper.Set("hostname", "unknowm")
-	} else {
-		viper.Set("hostname", hostname)
+		hostname = "unknowm"
 	}
+	viper.Set("hostname", hostname)
 
 	// Bind environment variables
 	viper.SetEnvPrefix("catalyst")
@@ -97,98 +96,100 @@ func initConfig() {
 var RootCmd = &cobra.Command{
 	Use:   "catalyst",
 	Short: "Catalyst multipass proxy",
-	Run: func(cmd *cobra.Command, args []string) {
-		log.Info("Catalyst starting")
-		router := echo.New()
-		router.HideBanner = true
+	Run:   RootRunFn,
+}
 
-		router.Use(middleware.CORSWithConfig(middleware.CORSConfig{
-			AllowOrigins:  []string{"*"},
-			AllowMethods:  []string{"GET", "PUT", "POST", "DELETE"},
-			AllowHeaders:  []string{"Origin", "Authorization", "Content-Type", "X-Warp10-Token"},
-			ExposeHeaders: []string{},
-		}))
+func RootRunFn(cmd *cobra.Command, args []string) {
+	log.Info("Catalyst starting")
+	router := echo.New()
+	router.HideBanner = true
 
-		router.Use(middlewares.Logger())
-		router.Use(middlewares.Bannishment(viper.GetDuration("bannishment.duration") * time.Millisecond))
+	router.Use(middleware.CORSWithConfig(middleware.CORSConfig{
+		AllowOrigins:  []string{"*"},
+		AllowMethods:  []string{"GET", "PUT", "POST", "DELETE"},
+		AllowHeaders:  []string{"Origin", "Authorization", "Content-Type", "X-Warp10-Token"},
+		ExposeHeaders: []string{},
+	}))
 
-		// Build catalysers
-		openTSDB := core.NewHandler("opentsdb", []string{"POST"}, catalyser.OpenTSDB, nil)
-		prometheus := core.NewHandler("prometheus", []string{"POST", "PUT"}, catalyser.Prometheus, nil)
-		prometheusRemote := core.NewHandler("prometheus_remote_write", []string{"POST", "PUT"}, catalyser.HandleRemoteWrite, nil)
-		influxdb := core.NewHandler("influxdb", []string{"POST"}, catalyser.InfluxDB, nil)
-		graphite := core.NewHandler("graphite", []string{"POST"}, catalyser.GraphiteHTTP, nil)
-		warp := core.NewHandler("warp", []string{"POST"}, catalyser.Warp, catalyser.WarpError)
+	router.Use(middlewares.Logger())
+	router.Use(middlewares.Bannishment(viper.GetDuration("bannishment.duration") * time.Millisecond))
 
-		graphiteTCP := catalyser.NewGraphite(viper.GetString("graphite.listen"), viper.GetBool("graphite.parse"))
-		go graphiteTCP.OpenTCPServer()
+	// Build catalysers
+	openTSDB := core.NewHandler("opentsdb", []string{"POST"}, catalyser.OpenTSDB, nil)
+	prometheus := core.NewHandler("prometheus", []string{"POST", "PUT"}, catalyser.Prometheus, nil)
+	prometheusRemote := core.NewHandler("prometheus_remote_write", []string{"POST", "PUT"}, catalyser.HandleRemoteWrite, nil)
+	influxdb := core.NewHandler("influxdb", []string{"POST"}, catalyser.InfluxDB, nil)
+	graphite := core.NewHandler("graphite", []string{"POST"}, catalyser.GraphiteHTTP, nil)
+	warp := core.NewHandler("warp", []string{"POST"}, catalyser.Warp, catalyser.WarpError)
 
-		// Support legacy
-		router.Any("/opentsdb", openTSDB.Handle)
-		router.Any("/prometheus", prometheus.Handle)
-		router.Any("/warp", warp.Handle)
-		router.Any("/influxdb", influxdb.Handle)
-		router.Any("/graphite/api/v1/sink", graphite.Handle)
+	graphiteTCP := catalyser.NewGraphite(viper.GetString("graphite.listen"), viper.GetBool("graphite.parse"))
+	go graphiteTCP.OpenTCPServer()
 
-		router.Any("/opentsdb/*", openTSDB.Handle)
-		router.Any("/prometheus/remote_write*", prometheusRemote.Handle)
-		router.Any("/prometheus/*", prometheus.Handle)
-		router.Any("/influxdb/write*", influxdb.Handle)
-		router.Any("/influxdb/ping*", catalyser.HandlePing)
-		router.Any("/warp/api/v0/update*", warp.Handle)
-		router.Any("/warp/api/v0/delete*", middlewares.ReverseWithConfig(middlewares.ReverseConfig{
-			URL:  viper.GetString("warp_endpoint_delete") + "/api/v0",
-			Path: "/delete",
-		}))
-		router.Any("/warp/api/v0/*", middlewares.ReverseWithConfig(middlewares.ReverseConfig{
-			URL: viper.GetString("warp_endpoint") + "/api/v0",
-		}))
+	// Support legacy
+	router.Any("/opentsdb", openTSDB.Handle)
+	router.Any("/prometheus", prometheus.Handle)
+	router.Any("/warp", warp.Handle)
+	router.Any("/influxdb", influxdb.Handle)
+	router.Any("/graphite/api/v1/sink", graphite.Handle)
 
-		metricsServer := echo.New()
-		metricsServer.HideBanner = true
+	router.Any("/opentsdb/*", openTSDB.Handle)
+	router.Any("/prometheus/remote_write*", prometheusRemote.Handle)
+	router.Any("/prometheus/*", prometheus.Handle)
+	router.Any("/influxdb/write*", influxdb.Handle)
+	router.Any("/influxdb/ping*", catalyser.HandlePing)
+	router.Any("/warp/api/v0/update*", warp.Handle)
+	router.Any("/warp/api/v0/delete*", middlewares.ReverseWithConfig(middlewares.ReverseConfig{
+		URL:  viper.GetString("warp_endpoint_delete") + "/api/v0",
+		Path: "/delete",
+	}))
+	router.Any("/warp/api/v0/*", middlewares.ReverseWithConfig(middlewares.ReverseConfig{
+		URL: viper.GetString("warp_endpoint") + "/api/v0",
+	}))
 
-		metricsServer.GET("/metrics", echo.WrapHandler(promhttp.Handler()))
+	metricsServer := echo.New()
+	metricsServer.HideBanner = true
 
-		go func() {
-			addr := viper.GetString("metrics.listen")
-			log.Infof("Metrics listen %s", addr)
-			if err := metricsServer.Start(addr); err != nil {
-				if err == http.ErrServerClosed {
-					log.Info("Gracefully close the metrics http server")
-					return
-				}
-				log.WithError(err).Fatal("Could not start the metrics http server")
+	metricsServer.GET("/metrics", echo.WrapHandler(promhttp.Handler()))
+
+	go func() {
+		addr := viper.GetString("metrics.listen")
+		log.Infof("Metrics listen %s", addr)
+		if err := metricsServer.Start(addr); err != nil {
+			if err == http.ErrServerClosed {
+				log.Info("Gracefully close the metrics http server")
+				return
 			}
-		}()
+			log.WithError(err).Fatal("Could not start the metrics http server")
+		}
+	}()
 
-		go func() {
-			addr := viper.GetString("listen")
-			log.Infof("Listen %s", addr)
-			if err := router.Start(addr); err != nil {
-				if err == http.ErrServerClosed {
-					log.Info("Gracefully close the http server")
-					return
-				}
-				log.WithError(err).Fatal("Could not start the http server")
+	go func() {
+		addr := viper.GetString("listen")
+		log.Infof("Listen %s", addr)
+		if err := router.Start(addr); err != nil {
+			if err == http.ErrServerClosed {
+				log.Info("Gracefully close the http server")
+				return
 			}
-		}()
-
-		// Wait for interrupt signal to gracefully shutdown the server
-		quit := make(chan os.Signal, 2)
-
-		signal.Notify(quit, syscall.SIGTERM)
-		signal.Notify(quit, syscall.SIGINT)
-
-		log.Info("Catalyst started")
-
-		<-quit
-
-		if err := router.Close(); err != nil {
-			log.WithError(err).Error("Could not close the server")
+			log.WithError(err).Fatal("Could not start the http server")
 		}
+	}()
 
-		if err := metricsServer.Close(); err != nil {
-			log.WithError(err).Error("Could not close the metrics server")
-		}
-	},
+	// Wait for interrupt signal to gracefully shutdown the server
+	quit := make(chan os.Signal, 2)
+
+	signal.Notify(quit, syscall.SIGTERM)
+	signal.Notify(quit, syscall.SIGINT)
+
+	log.Info("Catalyst started")
+
+	<-quit
+
+	if err := router.Close(); err != nil {
+		log.WithError(err).Error("Could not close the server")
+	}
+
+	if err := metricsServer.Close(); err != nil {
+		log.WithError(err).Error("Could not close the metrics server")
+	}
 }

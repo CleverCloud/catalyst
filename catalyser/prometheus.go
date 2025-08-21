@@ -3,6 +3,7 @@ package catalyser
 import (
 	"fmt"
 	"io"
+	"maps"
 	"math"
 	"net/http"
 	"net/url"
@@ -40,7 +41,7 @@ func Prometheus(url *url.URL, headers *http.Header, r io.Reader, send func([]byt
 	format := expfmt.ResponseFormat(*headers)
 	if format == expfmt.FmtUnknown {
 		// Falling back to text mode if no format
-		format = expfmt.FmtText
+		format = expfmt.NewFormat(expfmt.TypeTextPlain)
 	}
 
 	decoder := expfmt.NewDecoder(r, format)
@@ -48,9 +49,7 @@ func Prometheus(url *url.URL, headers *http.Header, r io.Reader, send func([]byt
 		return dps, -1, core.NewParsingError("Unable to create decoder to decode response", path)
 	}
 
-	log.WithFields(log.Fields{
-		"format": format,
-	}).Println("Decoding Prometheus")
+	log.WithFields(log.Fields{"format": format}).Println("Decoding Prometheus")
 
 	for {
 		// Decoding protobuff
@@ -94,9 +93,7 @@ func Prometheus(url *url.URL, headers *http.Header, r io.Reader, send func([]byt
 			}
 
 			// put additionnal labels
-			for key, value := range extraLabels {
-				dp.Labels[key] = value
-			}
+			maps.Copy(dp.Labels, extraLabels)
 			// TS and value
 			dp.Ts = float64(time.Unix(0, int64(metric.Timestamp)*1000*1000).UnixNano()) / 1000.0
 			dp.Value = float64(metric.Value)

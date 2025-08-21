@@ -329,7 +329,7 @@ func parseLine(metric string, parse bool) (*core.GTS, error) {
 		}
 	}
 
-	var value interface{}
+	var value any
 	skip := false
 
 	// try to convert the string into a float64

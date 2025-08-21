@@ -2,7 +2,6 @@ package catalyser
 
 import (
 	"io"
-	"io/ioutil"
 	"math"
 	"net/http"
 	"net/url"
@@ -20,7 +19,7 @@ import (
 func HandleRemoteWrite(url *url.URL, headers *http.Header, r io.Reader, send func([]byte) error, dpCounter prometheus.Counter) (int, int, error) {
 	dps := 0
 
-	compressed, err := ioutil.ReadAll(r)
+	compressed, err := io.ReadAll(r)
 	if err != nil {
 		log.WithError(err).Error("Cannot read body")
 		return 0, http.StatusBadRequest, err
@@ -80,7 +79,7 @@ func formatPromGts(ts *prompb.TimeSeries) []*core.GTS {
 		}
 	}
 
-	log.Debug(len(gtss))
+	log.Debugf("%d datapoints processed", len(gtss))
 
 	return gtss
 }

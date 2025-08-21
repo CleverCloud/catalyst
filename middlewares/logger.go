@@ -42,10 +42,12 @@ var (
 )
 
 func init() {
-	prometheus.MustRegister(requestCounter)
-	prometheus.MustRegister(requestErrorCounter)
-	prometheus.MustRegister(requestHTTPStatusCode)
-	prometheus.MustRegister(requestResponseTimeCounter)
+	prometheus.MustRegister(
+		requestCounter,
+		requestErrorCounter,
+		requestHTTPStatusCode,
+		requestResponseTimeCounter,
+	)
 }
 
 func logger(c echo.Context, next echo.HandlerFunc) error {
@@ -54,7 +56,7 @@ func logger(c echo.Context, next echo.HandlerFunc) error {
 	start := time.Now()
 
 	hash := sha256.New()
-	_, err := hash.Write([]byte(fmt.Sprintf("%s%x", req.Header.Get("X-Forwarded-For"), start.UnixNano())))
+	_, err := fmt.Fprintf(hash, "%s%x", req.Header.Get("X-Forwarded-For"), start.UnixNano())
 	if err == nil {
 		txn := fmt.Sprintf("%x", hash.Sum(nil))
 
