@@ -2,13 +2,15 @@
 //
 // Usage
 //
-// 		catalyst  [flags]
+//	catalyst  [flags]
+//
 // Flags:
-//       --config string   config file to use
-//       --help            display help
-//   -v, --verbose         verbose output
-//   -l, --listen          listen addresse
-//   -v, --log-level int   Log level (from 1 to 5)
+//
+//	    --config string   config file to use
+//	    --help            display help
+//	-v, --verbose         verbose output
+//	-l, --listen          listen addresse
+//	-v, --log-level int   Log level (from 1 to 5)
 package main
 
 import (

@@ -38,7 +38,7 @@ func HandleRemoteWrite(url *url.URL, headers *http.Header, r io.Reader, send fun
 	}
 
 	for _, promGts := range wReq.GetTimeseries() {
-		for _, gts := range formatPromGts(promGts) {
+		for _, gts := range formatPromGts(&promGts) {
 			_ = send(gts.Encode())
 			dpCounter.Inc()
 			dps++
