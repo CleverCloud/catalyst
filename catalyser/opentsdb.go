@@ -22,7 +22,7 @@ type dataPoint struct {
 	// A Unix epoch style timestamp in seconds or milliseconds
 	Timestamp int64 `json:"timestamp"`
 	// The value to record for this data point. Can be either an integer, a string or a float
-	Value interface{} `json:"value"`
+	Value any `json:"value"`
 	// A map of tag name/tag value pairs. At least one pair must be supplied
 	Tags map[string]string `json:"tags"`
 }

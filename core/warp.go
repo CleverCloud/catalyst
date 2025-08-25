@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"math"
 	"net"
 	"net/http"
@@ -41,7 +40,7 @@ type GTS struct {
 	Ts     float64
 	Name   string
 	Labels map[string]string
-	Value  interface{}
+	Value  any
 }
 
 // WarpInvalidToken invalid warp token error
@@ -221,7 +220,7 @@ func NewWarp(token, txn, now string) (*Warp, error) {
 			}
 		}()
 
-		body, err := ioutil.ReadAll(res.Body)
+		body, err := io.ReadAll(res.Body)
 		if err != nil {
 			w.mutex.Lock()
 			defer w.mutex.Unlock()
